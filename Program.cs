@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using CsvHelper;
 
@@ -40,11 +41,11 @@ string datasetPath = Path.Combine(projectRootPath, "2019-Nov.csv");
 // Инициализация переменных для хранения агрегированных данных
 decimal revenue = 0; // Выручка
 (string? name, int count) mostPopularBrand = new (null, 0); // Самый популярный бренд
-var brands = new Dictionary<string, int>();
+var brands = new ConcurrentDictionary<string, int>();
 (string? id, string? code, int count) mostPopularCategory = new (null, null, 0); // Самая популярная категория
-var categories = new Dictionary<string, int>();
+var categories = new ConcurrentDictionary<string, int>();
 (string? id, int count) mostPopularProduct = new (null, 0); // Самый популярный товар
-var products = new Dictionary<string, int>();
+var products = new ConcurrentDictionary<string, int>();
 
 // Объекты блокировки для безопасности потоков
 var recordLock = new Object();
@@ -65,6 +66,7 @@ try
     int limiter = 1000000000; // Лимит обработки батчей (можно удалить, если предполагается чтение всего csv файла)
     long recordsBatchSize = 0;
     double averageRecordSize = 0;
+    long averageSpeed = 0;
     DateTime startTime = DateTime.Now;
     long lastProgressSize = 0;
     long estimatedRecords = 0;
@@ -85,9 +87,17 @@ try
             try
             {
                 long currentProgressSize = (long)(recordProgressCount * averageRecordSize);
-                long averageSpeed = currentProgressSize - lastProgressSize;
-                Console.WriteLine($"{SizeSuffix(currentProgressSize)} / {SizeSuffix(estimatedFileSize)}\t{SizeSuffix(Math.Max(averageSpeed, 0))}/s\t" + ((float)recordProgressCount / estimatedRecords).ToString("0.00%"));
+                long currentSpeed = currentProgressSize - lastProgressSize;
+                TimeSpan timeSpent = TimeSpan.FromSeconds((DateTime.Now - startTime).TotalSeconds);
+                averageSpeed = (long)(currentProgressSize / timeSpent.TotalSeconds);
+                TimeSpan estimatedFinishTime = TimeSpan.FromSeconds(estimatedFileSize / averageSpeed);
                 lastProgressSize = currentProgressSize;
+
+                Console.WriteLine(
+                    $"{SizeSuffix(currentProgressSize)} / {SizeSuffix(estimatedFileSize)}\t" +
+                    $"{SizeSuffix(Math.Max(averageSpeed, 0))}/s\t" + 
+                    ((double)recordProgressCount / estimatedRecords).ToString("0.00%\t") + 
+                    timeSpent.ToString("hh\\:mm\\:ss") + "/" + estimatedFinishTime.ToString("hh\\:mm\\:ss"));
             }
             catch (System.DivideByZeroException)
             {
@@ -206,10 +216,11 @@ void ProcessRecords(List<dynamic> records)
     lock (recordLock)
     {
         revenue += revenueBatch;
-        UpdateGlobalDictionary(brands, brandsBatch);
-        UpdateGlobalDictionary(categories, categoriesBatch);
-        UpdateGlobalDictionary(products, productsBatch);
     }
+
+    UpdateGlobalDictionary(brands, brandsBatch);
+    UpdateGlobalDictionary(categories, categoriesBatch);
+    UpdateGlobalDictionary(products, productsBatch);
 }
 
 // Вспомогательная функция для обновления словаря
@@ -226,18 +237,11 @@ void UpdateDictionary(Dictionary<string, int> dictionary, string key)
 }
 
 // Вспомогательная функция для обновления глобальных словарей
-void UpdateGlobalDictionary(Dictionary<string, int> globalDictionary, Dictionary<string, int> batchDictionary)
+void UpdateGlobalDictionary(ConcurrentDictionary<string, int> globalDictionary, Dictionary<string, int> batchDictionary)
 {
     foreach (var item in batchDictionary)
     {
-        if (globalDictionary.ContainsKey(item.Key))
-        {
-            globalDictionary[item.Key] += item.Value;
-        }
-        else
-        {
-            globalDictionary.Add(item.Key, item.Value);
-        }
+        globalDictionary.AddOrUpdate(item.Key, item.Value, (key, oldValue) => oldValue += item.Value);
 
         // Обновление метрик популярности
         if (ReferenceEquals(globalDictionary, brands) && mostPopularBrand.count < globalDictionary[item.Key])
