@@ -63,18 +63,16 @@ try
     int recordCount = 0;
     int recordProgressCount = 0;
     int batchSize = 128; // Размер батча
-    int limiter = 1000000000; // Лимит обработки батчей (можно удалить, если предполагается чтение всего csv файла)
     long recordsBatchSize = 0;
-    double averageRecordSize = 0;
+    long recordsProcessedSize = 0;
     long averageSpeed = 0;
     DateTime startTime = DateTime.Now;
     long lastProgressSize = 0;
-    long estimatedRecords = 0;
-    long estimatedFileSize = 0;
 
     // Получение размера файла
     var fileInfo = new FileInfo(datasetPath);
     long fileSizeInBytes = fileInfo.Length;
+    ASCIIEncoding aSCII = new ASCIIEncoding();
 
     // Завершена ли обработка всего CSV файла?
     bool IsDone = false;
@@ -86,17 +84,17 @@ try
         {
             try
             {
-                long currentProgressSize = (long)(recordProgressCount * averageRecordSize);
+                long currentProgressSize = recordsProcessedSize;
                 long currentSpeed = currentProgressSize - lastProgressSize;
                 TimeSpan timeSpent = TimeSpan.FromSeconds((DateTime.Now - startTime).TotalSeconds);
                 averageSpeed = (long)(currentProgressSize / timeSpent.TotalSeconds);
-                TimeSpan estimatedFinishTime = TimeSpan.FromSeconds(estimatedFileSize / averageSpeed);
+                TimeSpan estimatedFinishTime = TimeSpan.FromSeconds(fileSizeInBytes / averageSpeed);
                 lastProgressSize = currentProgressSize;
 
                 Console.WriteLine(
-                    $"{SizeSuffix(currentProgressSize)} / {SizeSuffix(estimatedFileSize)}\t" +
+                    $"{SizeSuffix(currentProgressSize)} / {SizeSuffix(fileSizeInBytes)}\t" +
                     $"{SizeSuffix(Math.Max(averageSpeed, 0))}/s\t" + 
-                    ((double)recordProgressCount / estimatedRecords).ToString("0.00%\t") + 
+                    ((double)currentProgressSize / fileSizeInBytes).ToString("0.00%\t") + 
                     timeSpent.ToString("hh\\:mm\\:ss") + "/" + estimatedFinishTime.ToString("hh\\:mm\\:ss"));
             }
             catch (System.DivideByZeroException)
@@ -117,17 +115,13 @@ try
     });
     
     // Чтение и обработка данных из CSV файла
-    while (csv.Read() && limiter > 0)
+    while (csv.Read())
     {
         var record = csv.GetRecord<dynamic>();
 
         // Расчёт размера записи для оценки прогресса
-        int recordSize = Encoding.UTF8.GetByteCount(record.event_time + record.event_type + record.product_id + record.category_id + record.category_code + record.brand + record.price + record.user_id + record.user_session);
+        int recordSize = aSCII.GetByteCount(record.event_time + record.event_type + record.product_id + record.category_id + record.category_code + record.brand + record.price + record.user_id + record.user_session) * 2;
         recordsBatchSize += recordSize;
-        if (averageRecordSize == 0)
-        {
-            averageRecordSize = recordSize;
-        }
 
         recordsBatch.Add(record);
         recordCount++;
@@ -137,26 +131,15 @@ try
         {
             var recordsToProcess = new List<dynamic>(recordsBatch);
 
-            // Оценка среднего размера одной записи
-            averageRecordSize = ((double)recordsBatchSize / batchSize + averageRecordSize) / 2;
-
-            // Оценка приблизительного количества записей во всем CSV файле
-            estimatedRecords = (long)(fileSizeInBytes / averageRecordSize);
-
-            // Оценка размера CSV файла
-            if (estimatedFileSize == 0 ) {
-                estimatedFileSize = (long)(estimatedRecords * averageRecordSize);
-            }
-
             // Обработка набора (batch) записей
             tasks.Add(Task.Run(() => ProcessRecords(recordsToProcess)).ContinueWith(_ =>
             {
-               recordProgressCount += batchSize;
+                recordProgressCount += batchSize;
+                recordsProcessedSize += recordsBatchSize;
             }));
 
             recordsBatch.Clear();
             recordsBatchSize = 0;
-            limiter--;
         }
     }
 
