@@ -1,5 +1,7 @@
 Это консольное приложение .NET 8, использующее инструкции верхнего уровня (top-level statement feature).
 
+[Исходный код](Program.cs)
+
 Для тестирования программы я использовал набор данных 2019-Nov.csv, доступный по ссылке (https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store), как и требовалось в техническом задании.
 
 Результатом выполнения этого приложения является:
